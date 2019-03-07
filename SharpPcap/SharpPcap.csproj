@@ -10,6 +10,7 @@
     <RepositoryUrl>https://github.com/chmorgan/sharppcap</RepositoryUrl>
     <Copyright>Tamir Gal, Chris Morgan and others</Copyright>
     <PackageLicenseUrl>https://github.com/chmorgan/sharppcap/blob/master/LICENSE</PackageLicenseUrl>
+    <IsWindows Condition="'$([System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform($([System.Runtime.InteropServices.OSPlatform]::Windows)))' == 'true'">true</IsWindows>
   </PropertyGroup>
 
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|AnyCPU'">
@@ -18,6 +19,10 @@
 
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|AnyCPU'">
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(IsWindows)'=='true'">
+    <DefineConstants>Windows</DefineConstants>
   </PropertyGroup>
 
   <ItemGroup>

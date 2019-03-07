@@ -26,6 +26,9 @@ using System.Collections.ObjectModel;
 using System.Net.NetworkInformation;
 using System.Runtime.InteropServices;
 using System.Collections.Generic;
+using System.Linq;
+using System.Net.Sockets;
+using SharpPcap.Borrowed;
 
 namespace SharpPcap.LibPcap
 {
@@ -34,6 +37,70 @@ namespace SharpPcap.LibPcap
     /// </summary>
     public class LibPcapLiveDevice : PcapDevice
     {
+#if Windows
+        internal static NetworkInterface[] GetNetworkInterfaces()
+        {
+            AddressFamily family = AddressFamily.Unspecified;
+            uint outBufLen = 0;
+            Interop.FIXED_INFO fixedInfo = HostInformationPal.GetFixedInfo();
+            List<SystemNetworkInterface> networkInterfaceList = new List<SystemNetworkInterface>();
+            Interop.GetAdaptersAddressesFlags adaptersAddressesFlags =
+                Interop.GetAdaptersAddressesFlags.IncludeWins | Interop.GetAdaptersAddressesFlags.IncludeGateways |
+                Interop.GetAdaptersAddressesFlags.IncludeAllInterfaces;
+            uint adaptersAddresses = Interop.GetAdaptersAddresses(family, (uint)adaptersAddressesFlags, IntPtr.Zero, SafeLocalAllocHandle.Zero, ref outBufLen);
+            while ((int)adaptersAddresses == 111)
+            {
+                SafeLocalAllocHandle adapterAddresses;
+                using (adapterAddresses = SafeLocalAllocHandle.LocalAlloc((int)outBufLen))
+                {
+                    adaptersAddresses = Interop.GetAdaptersAddresses(family, (uint)adaptersAddressesFlags, IntPtr.Zero, adapterAddresses, ref outBufLen);
+                    Interop.IpAdapterAddresses structure;
+                    if ((int)adaptersAddresses == 0)
+                    {
+                        for (IntPtr ptr = adapterAddresses.DangerousGetHandle(); ptr != IntPtr.Zero; ptr = structure.next)
+                        {
+                            structure = Marshal.PtrToStructure<Interop.IpAdapterAddresses>(ptr);
+                            var a = new SystemNetworkInterface(fixedInfo, structure);
+                            networkInterfaceList.Add(a);
+                        }
+                    }
+                }
+            }
+            if ((int)adaptersAddresses == 232 || (int)adaptersAddresses == 87)
+                return (NetworkInterface[])Array.Empty<SystemNetworkInterface>();
+            if ((int)adaptersAddresses != 0)
+                throw new NetworkInformationException((int)adaptersAddresses);
+            return (NetworkInterface[])networkInterfaceList.ToArray();
+        }
+#endif
+
+        private static NetworkInterface[] GetBestEffortNetworkInterfaces()
+        {
+#if Windows
+            // Retrieving full info on un-bridged interfaces using .NET's wrapper
+            NetworkInterface[] dontNetInterfaces = NetworkInterface.GetAllNetworkInterfaces();
+            // Retrieving full info on ALL un-bridged/bridged/pseudo/etc interfaces using IP Helper API
+            NetworkInterface[] ipHlpInterfaces = GetNetworkInterfaces();
+
+            // Combine the arrays such that missing interfaces in .NET's array will be added
+            // The interfaces already in .NET's array aren't overriden/updated
+            Dictionary<String, NetworkInterface> nicsDict = dontNetInterfaces.ToDictionary(netInter => netInter.Id);
+            foreach (NetworkInterface networkInterface in ipHlpInterfaces)
+            {
+                // Only add unseen interfaces
+                if (!nicsDict.ContainsKey(networkInterface.Id))
+                {
+                    nicsDict[networkInterface.Id] = networkInterface;
+                }
+            }
+            NetworkInterface[] fixedNics = nicsDict.Values.ToArray();
+            return fixedNics;
+#else
+            return NetworkInterface.GetAllNetworkInterfaces();
+#endif
+        }
+
+
         /// <summary>
         /// Constructs a new PcapDevice based on a 'pcapIf' struct
         /// </summary>
@@ -45,19 +112,20 @@ namespace SharpPcap.LibPcap
 
             // go through the network interfaces and attempt to populate the mac address, 
             // friendly name etc of this device
-            NetworkInterface[] nics = NetworkInterface.GetAllNetworkInterfaces();
-            foreach (NetworkInterface adapter in nics)
+            NetworkInterface[] fixedNics = GetBestEffortNetworkInterfaces();
+            foreach (NetworkInterface adapter in fixedNics)
             {
                 // if the name and id match then we have found the NetworkInterface
                 // that matches the PcapDevice
                 if (Name.EndsWith(adapter.Id))
                 {
                     var ipProperties = adapter.GetIPProperties();
-                    int gatewayAddressCount = ipProperties.GatewayAddresses.Count;
+                    int gatewayAddressCount = ipProperties?.GatewayAddresses.Count ?? 0;
                     if (gatewayAddressCount != 0)
                     {
                         List<System.Net.IPAddress> gatewayAddresses = new List<System.Net.IPAddress>();
-                        foreach(GatewayIPAddressInformation gatewayInfo in ipProperties.GatewayAddresses) {
+                        foreach(GatewayIPAddressInformation gatewayInfo in ipProperties.GatewayAddresses)
+                        {
                             gatewayAddresses.Add(gatewayInfo.Address);
                         }
                         Interface.GatewayAddresses = gatewayAddresses;
